@@ -76,6 +76,18 @@ $INCLUDE_STOPPED && STATES="running,stopped"
 # -----------------------------------------------------------------------------
 log_err() { echo "[$1] $2" >> "$ERRLOG"; }
 
+# Progress line: on a terminal it is rewritten in place, otherwise (e.g. output
+# redirected to a file) each step is printed on its own line.
+IS_TTY=false
+[[ -t 1 ]] && IS_TTY=true
+progress() {
+  if $IS_TTY; then printf '\r\033[K  %s' "$*"; else echo "  $*"; fi
+}
+clear_progress() {
+  $IS_TTY && printf '\r\033[K'
+  return 0
+}
+
 # Runs an aws call that returns a number (query using length()/sum()).
 # On failure it logs the problem and returns 0.
 #   n <context> aws-args...
@@ -124,10 +136,11 @@ echo "account,region,ec2_instances,of_which_eks_nodes,lambda_functions,fargate_c
 # Count resources in a single region
 # -----------------------------------------------------------------------------
 scan_region() {
-  local acct=$1 r=$2
+  local acct=$1 r=$2 tag="[$3/$4] $2"
 
   local ec2 eks lambda fargate=0 apprunner ecr=0 rds aurora aurora_sls redshift ddb_tables=0 ddb_bytes=0
 
+  progress "$tag: EC2..."
   # EC2: count instances, not reservations (one reservation can hold many instances)
   ec2=$(n "$acct/$r ec2" ec2 describe-instances --region "$r" \
         --filters "Name=instance-state-name,Values=$STATES" \
@@ -137,9 +150,11 @@ scan_region() {
         --filters "Name=instance-state-name,Values=$STATES" "Name=tag-key,Values=eks:cluster-name,kubernetes.io/cluster/*" \
         --query 'length(Reservations[].Instances[])')
 
+  progress "$tag: Lambda..."
   # Lambda functions
   lambda=$(n "$acct/$r lambda" lambda list-functions --region "$r" --query 'length(Functions)')
 
+  progress "$tag: ECS Fargate / App Runner..."
   # ECS Fargate: containers inside running tasks (describe-tasks accepts max 100 tasks per call)
   local clusters cl tasks batch t count
   clusters=$(l "$acct/$r ecs-clusters" ecs list-clusters --region "$r" --query 'clusterArns[]')
@@ -166,14 +181,19 @@ scan_region() {
   apprunner=$(aws apprunner list-services --region "$r" --query 'length(ServiceSummaryList)' --output json 2>/dev/null)
   [[ "$apprunner" =~ ^[0-9]+$ ]] || apprunner=0
 
+  progress "$tag: ECR images..."
   # ECR: images (manifests) in every repository
-  local repos repo imgs
+  local repos repo imgs k=0 nrepos
   repos=$(l "$acct/$r ecr-repos" ecr describe-repositories --region "$r" --query 'repositories[].repositoryName')
+  nrepos=$(wc -w <<< "$repos")
   for repo in $repos; do
+    k=$((k + 1))
+    progress "$tag: ECR images (repository $k/$nrepos)..."
     imgs=$(n "$acct/$r ecr-images" ecr describe-images --region "$r" --repository-name "$repo" --query 'length(imageDetails)')
     ecr=$((ecr + imgs))
   done
 
+  progress "$tag: RDS / Redshift..."
   # PaaS databases: every RDS instance (MySQL, PostgreSQL, MariaDB, Oracle, SQL Server,
   # Aurora, DocumentDB, Neptune) + Aurora Serverless v1 clusters (which have no instances)
   rds=$(n "$acct/$r rds" rds describe-db-instances --region "$r" --query 'length(DBInstances)')
@@ -183,15 +203,19 @@ scan_region() {
                --query "length(DBClusters[?EngineMode=='serverless'])")
   redshift=$(n "$acct/$r redshift" redshift describe-clusters --region "$r" --query 'length(Clusters)')
 
+  progress "$tag: DynamoDB..."
   # DynamoDB (DBaaS): number of tables and bytes stored
-  local tables tb bytes
+  local tables tb bytes ntables
   tables=$(l "$acct/$r dynamodb" dynamodb list-tables --region "$r" --query 'TableNames[]')
+  ntables=$(wc -w <<< "$tables")
   for tb in $tables; do
+    progress "$tag: DynamoDB (table $((ddb_tables + 1))/$ntables)..."
     ddb_tables=$((ddb_tables + 1))
     bytes=$(n "$acct/$r dynamodb-size" dynamodb describe-table --region "$r" --table-name "$tb" --query 'Table.TableSizeBytes')
     ddb_bytes=$((ddb_bytes + bytes))
   done
 
+  clear_progress
   # Print only regions that contain something
   local any=$((ec2 + lambda + fargate + apprunner + ecr + rds + aurora_sls + redshift + ddb_tables))
   if (( any > 0 )); then
@@ -211,9 +235,9 @@ scan_region() {
 # Count resources in a single account
 # -----------------------------------------------------------------------------
 scan_account() {
-  local acct=$1 regions r s3
+  local acct=$1 label=${2:-} regions r s3 i=0 nreg
   echo ""
-  echo "== Account $acct"
+  echo "== Account $acct${label:+ ($label)}"
 
   if [[ -n "$ONLY_REGION" ]]; then
     regions=$ONLY_REGION
@@ -230,14 +254,20 @@ scan_account() {
   fi
 
   # S3 is global: a single call per account
+  progress "S3 buckets..."
   s3=$(n "$acct s3" s3api list-buckets --query 'length(Buckets)')
+  clear_progress
   echo "    S3 buckets (global): $s3"
   echo "$acct,global,,,,,,,$s3,,,,,," >> "$CSV_FILE"
   T_S3=$((T_S3 + s3))
 
+  nreg=$(wc -w <<< "$regions")
   for r in $regions; do
-    scan_region "$acct" "$r"
+    i=$((i + 1))
+    scan_region "$acct" "$r" "$i" "$nreg"
   done
+  clear_progress
+  echo "    Regions scanned: $nreg"
   T_ACCOUNTS=$((T_ACCOUNTS + 1))
 }
 
@@ -254,22 +284,24 @@ if $ORG_MODE; then
   ACCOUNTS=$(aws organizations list-accounts --query "Accounts[?Status=='ACTIVE'].Id" --output text 2>"$ERRLOG.tmp") || {
     echo "Error: unable to list organization accounts:" >&2; cat "$ERRLOG.tmp" >&2; exit 1; }
   echo "Organization mode, role: $ROLE"
+  NACC=$(wc -w <<< "$ACCOUNTS"); IACC=0
   for acct in $ACCOUNTS; do
+    IACC=$((IACC + 1))
     if [[ "$acct" == "$CALLER" ]]; then
-      scan_account "$acct"      # current account: use the current credentials
+      scan_account "$acct" "$IACC/$NACC"      # current account: use the current credentials
       continue
     fi
     creds=$(aws sts assume-role --role-arn "arn:aws:iam::${acct}:role/${ROLE}" --role-session-name cortex-sizing \
             --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text 2>"$ERRLOG.tmp")
     if [[ $? -ne 0 || -z "$creds" ]]; then
       log_err "$acct" "assume-role failed, account NOT counted: $(head -c 200 "$ERRLOG.tmp" | tr '\n' ' ')"
-      echo ""; echo "== Account $acct: unable to assume role, skipped"
+      echo ""; echo "== Account $acct ($IACC/$NACC): unable to assume role, skipped"
       continue
     fi
     read -r AK SK ST <<< "$creds"
     AWS_ACCESS_KEY_ID=$AK AWS_SECRET_ACCESS_KEY=$SK AWS_SESSION_TOKEN=$ST
     export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
-    scan_account "$acct"
+    scan_account "$acct" "$IACC/$NACC"
     unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
   done
 else

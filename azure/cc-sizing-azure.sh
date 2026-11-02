@@ -72,6 +72,18 @@ trap 'rm -f "$ERRLOG" "$ERRLOG.tmp"' EXIT
 # -----------------------------------------------------------------------------
 log_err() { echo "[$1] $2" >> "$ERRLOG"; }
 
+# Progress line: on a terminal it is rewritten in place, otherwise (e.g. output
+# redirected to a file) each step is printed on its own line.
+IS_TTY=false
+[[ -t 1 ]] && IS_TTY=true
+progress() {
+  if $IS_TTY; then printf '\r\033[K  %s' "$*"; else echo "  $*"; fi
+}
+clear_progress() {
+  $IS_TTY && printf '\r\033[K'
+  return 0
+}
+
 # Optional location filter injected into JMESPath queries
 LOCF=""
 [[ -n "$ONLY_LOC" ]] && LOCF="?location=='$ONLY_LOC'"
@@ -122,10 +134,11 @@ echo "subscription,vm,vmss_uniform_instances,of_which_aks_nodes,functions,aci_co
 # Count resources in a single subscription
 # -----------------------------------------------------------------------------
 scan_sub() {
-  local sub=$1 name=$2 S=(--subscription "$1")
+  local sub=$1 name=$2 S=(--subscription "$1") tag="[$3/$4] $2"
   echo ""
-  echo "== Subscription $name ($sub)"
+  echo "== Subscription $name ($sub) [$3/$4]"
 
+  progress "$tag: Virtual Machines..."
   # --- Standalone VMs (including VMs of Flexible-mode scale sets) ---
   # 'vm list -d' adds powerState so stopped/deallocated VMs can be filtered out
   local vmq="length([${LOCF:+$LOCF}])"
@@ -135,6 +148,7 @@ scan_sub() {
   fi
   local vm; vm=$(n "$name vm" vm list -d "${S[@]}" --query "$vmq")
 
+  progress "$tag: VM Scale Sets / AKS..."
   # --- Uniform VM Scale Set instances (include AKS nodes) ---
   # Flexible scale sets are excluded here because their VMs already show up in 'vm list'
   local vmssq="sum([?orchestrationMode=='Uniform'].sku.capacity)"
@@ -146,11 +160,13 @@ scan_sub() {
   [[ -n "$ONLY_LOC" ]] && aksq="sum([?location=='$ONLY_LOC'].agentPoolProfiles[].count)"
   local aks; aks=$(n "$name aks" aks list "${S[@]}" --query "$aksq")
 
+  progress "$tag: Function Apps..."
   # --- Azure Functions: individual functions inside every Function App ---
   local func=0 apps rg fname cnt
   apps=$(l "$name functionapp" functionapp list "${S[@]}" --query "[${LOCF:+$LOCF}].[name,resourceGroup]")
   while IFS=$'\t' read -r fname rg; do
     [[ -z "$fname" ]] && continue
+    progress "$tag: Function App $fname..."
     cnt=$(az functionapp function list -n "$fname" -g "$rg" "${S[@]}" --query "length(@)" -o tsv 2>"$ERRLOG.tmp")
     if [[ "$cnt" =~ ^[0-9]+$ ]] && (( cnt > 0 )); then
       func=$((func + cnt))
@@ -161,25 +177,30 @@ scan_sub() {
     fi
   done <<< "$apps"
 
+  progress "$tag: Container Instances / Container Apps..."
   # --- CaaS: ACI containers and Container Apps containers ---
   local aci aca
   aci=$(n "$name aci" container list "${S[@]}" --query "length([${LOCF:+$LOCF}].containers[])")
   aca=$(n "$name containerapp" containerapp list "${S[@]}" --query "length([${LOCF:+$LOCF}].properties.template.containers[])")
 
+  progress "$tag: ACR images..."
   # --- Images (manifests) in Azure Container Registry ---
   local acr=0 regs reg repos repo imgs
   regs=$(l "$name acr" acr list "${S[@]}" --query "[${LOCF:+$LOCF}].name")
   for reg in $regs; do
     repos=$(l "$name acr/$reg repos" acr repository list -n "$reg" "${S[@]}")
     for repo in $repos; do
+      progress "$tag: ACR $reg/$repo..."
       imgs=$(n "$name acr/$reg/$repo" acr manifest list-metadata -r "$reg" -n "$repo" "${S[@]}" --query "length(@)")
       acr=$((acr + imgs))
     done
   done
 
+  progress "$tag: Storage accounts..."
   # --- Storage accounts (used as the cloud bucket equivalent) ---
   local st; st=$(n "$name storage" storage account list "${S[@]}" --query "length([${LOCF:+$LOCF}])")
 
+  progress "$tag: databases..."
   # --- PaaS databases ---
   # Azure SQL is counted per database (excluding 'master'); logical servers are reported too
   local sql=0 sqldb=0 servers srv srg d
@@ -197,6 +218,7 @@ scan_sub() {
   # Cosmos DB is DBaaS (licensed per TB stored): only the account count is reported
   cosmos=$(n "$name cosmosdb" cosmosdb list "${S[@]}" --query "length([${LOCF:+$LOCF}])")
 
+  clear_progress
   printf '    VM %s | VMSS %s (AKS %s) | Functions %s | ACI %s | ContainerApps %s | ACR img %s | Storage %s | SQL srv %s (db %s) | SQL MI %s | PG %s | MySQL %s | Cosmos %s\n' \
     "$vm" "$vmss" "$aks" "$func" "$aci" "$aca" "$acr" "$st" "$sql" "$sqldb" "$sqlmi" "$pg" "$my" "$cosmos"
   echo "$sub,$vm,$vmss,$aks,$func,$aci,$aca,$acr,$st,$sql,$sqldb,$sqlmi,$pg,$my,$cosmos" >> "$CSV_FILE"
@@ -224,9 +246,11 @@ else
 fi
 [[ -z "$SUBS" ]] && { echo "No enabled subscription found." >&2; exit 1; }
 
+NSUB=$(grep -c . <<< "$SUBS"); ISUB=0
 while IFS=$'\t' read -r sid sname; do
   [[ -z "$sid" ]] && continue
-  scan_sub "$sid" "$sname"
+  ISUB=$((ISUB + 1))
+  scan_sub "$sid" "$sname" "$ISUB" "$NSUB"
 done <<< "$SUBS"
 
 # -----------------------------------------------------------------------------
