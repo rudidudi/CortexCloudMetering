@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""Mock della AWS CLI v2 per i test: dati sintetici con risultato noto.
+Applica le query JMESPath reali e riproduce i formati di output json/text."""
+import json, os, sys
+import jmespath
+
+a = sys.argv[1:]
+
+def opt(name, default=None):
+    return a[a.index(name) + 1] if name in a else default
+
+def multi(name):
+    """Valori di un'opzione che accetta piu' argomenti (es. --filters A B)."""
+    if name not in a:
+        return []
+    out = []
+    for x in a[a.index(name) + 1:]:
+        if x.startswith('--'):
+            break
+        out.append(x)
+    return out
+
+svc, op = a[0], a[1]
+region = opt('--region', os.environ.get('AWS_DEFAULT_REGION', 'eu-west-1'))
+account = '111111111111' if not os.environ.get('AWS_SESSION_TOKEN') else os.environ['AWS_SESSION_TOKEN']
+
+def inst(i, state='running', eks=False):
+    tags = [{"Key": "eks:cluster-name", "Value": "c1"}] if eks else []
+    return {"InstanceId": i, "State": {"Name": state}, "Tags": tags}
+
+# Reservation con piu' istanze per verificare che si contino le istanze e non le reservation
+EC2 = {
+    "eu-west-1": [[inst('i1', eks=True), inst('i2', eks=True), inst('i3')], [inst('i4')], [inst('i5', 'stopped')]],
+    "eu-south-1": [[inst('i6'), inst('i7')]],
+}
+W = region == 'eu-west-1'
+R = None
+
+if svc == 'sts' and op == 'get-caller-identity':
+    R = {"Account": account}
+elif svc == 'sts' and op == 'assume-role':
+    arn = opt('--role-arn')
+    acct = arn.split(':')[4]
+    if acct == '333333333333':
+        sys.stderr.write("An error occurred (AccessDenied) when calling the AssumeRole operation\n")
+        sys.exit(254)
+    R = {"Credentials": {"AccessKeyId": "AK", "SecretAccessKey": "SK", "SessionToken": acct}}
+elif svc == 'organizations':
+    R = {"Accounts": [{"Id": i, "Status": "ACTIVE"} for i in ("111111111111", "222222222222", "333333333333")]
+         + [{"Id": "444444444444", "Status": "SUSPENDED"}]}
+elif svc == 'account':
+    R = {"Regions": [{"RegionName": "eu-west-1"}, {"RegionName": "eu-south-1"}]}
+elif svc == 'ec2' and op == 'describe-regions':
+    R = {"Regions": [{"RegionName": "eu-west-1"}, {"RegionName": "eu-south-1"}]}
+elif svc == 'ec2' and op == 'describe-instances':
+    states, tagkeys = None, None
+    for f in multi('--filters'):
+        name, values = f.split(',Values=', 1)
+        vals = values.split(',')
+        if name == 'Name=instance-state-name':
+            states = vals
+        if name == 'Name=tag-key':
+            tagkeys = vals
+    res = []
+    for rv in EC2.get(region, []):
+        ii = [x for x in rv
+              if (not states or x["State"]["Name"] in states)
+              and (not tagkeys or any(t["Key"] in tagkeys for t in x["Tags"]))]
+        if ii:
+            res.append({"Instances": ii})
+    R = {"Reservations": res}
+elif svc == 'lambda' and op == 'list-functions':
+    R = {"Functions": [{"FunctionArn": f"arn:aws:lambda:{region}:1:function:f{i}"} for i in range(30)]}
+elif svc == 'ecs' and op == 'list-clusters':
+    R = {"clusterArns": ["arn:aws:ecs:eu-west-1:1:cluster/app"] if W else []}
+elif svc == 'ecs' and op == 'list-tasks':
+    assert opt('--launch-type') == 'FARGATE'
+    R = {"taskArns": [f"arn:aws:ecs:eu-west-1:1:task/app/t{i}" for i in range(12)]}
+elif svc == 'ecs' and op == 'describe-tasks':
+    R = {"tasks": [{"taskArn": t, "containers": [{"name": "app"}, {"name": "sidecar"}]} for t in multi('--tasks')]}
+elif svc == 'apprunner':
+    R = {"ServiceSummaryList": [{"ServiceArn": "arn:apprunner:svc1"}] if W else []}
+elif svc == 'ecr' and op == 'describe-repositories':
+    R = {"repositories": [{"repositoryName": "repo1"}, {"repositoryName": "repo2"}] if W else []}
+elif svc == 'ecr' and op == 'describe-images':
+    R = {"imageDetails": [{"imageDigest": f"sha256:{i}"} for i in range(150)]}
+elif svc == 's3api':
+    R = {"Buckets": [{"Name": f"b{i}"} for i in range(25)]}
+elif svc == 'rds' and op == 'describe-db-instances':
+    R = {"DBInstances": [
+        {"DBInstanceIdentifier": "pg1", "Engine": "postgres"},
+        {"DBInstanceIdentifier": "pg2", "Engine": "postgres"},
+        {"DBInstanceIdentifier": "aur-w", "Engine": "aurora-postgresql"},
+        {"DBInstanceIdentifier": "aur-r", "Engine": "aurora-postgresql"},
+    ] if W else []}
+elif svc == 'rds' and op == 'describe-db-clusters':
+    R = {"DBClusters": [
+        {"DBClusterIdentifier": "aur", "Engine": "aurora-postgresql", "EngineMode": "provisioned"},
+        {"DBClusterIdentifier": "sls", "Engine": "aurora-mysql", "EngineMode": "serverless"},
+    ] if W else []}
+elif svc == 'redshift':
+    R = {"Clusters": [{"ClusterIdentifier": "dwh"}] if W else []}
+elif svc == 'dynamodb' and op == 'list-tables':
+    R = {"TableNames": [f"t{i}" for i in range(10)] if W else []}
+elif svc == 'dynamodb' and op == 'describe-table':
+    R = {"Table": {"TableSizeBytes": 200 * 10**9}}
+else:
+    sys.exit(f"mock aws: comando non gestito {a}")
+
+q = opt('--query')
+if q:
+    R = jmespath.search(q, R)
+
+if opt('--output', 'json') == 'text':
+    if R is None:
+        print("None")
+    elif isinstance(R, list):
+        if R and all(isinstance(x, list) for x in R):
+            for x in R:
+                print("\t".join(map(str, x)))
+        elif R:
+            print("\t".join(map(str, R)))
+    else:
+        print(R)
+else:
+    print(json.dumps(R))

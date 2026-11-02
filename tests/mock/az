@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""Mock della Azure CLI per i test: sub-A con risorse, sub-B vuota, sub-C disabilitata.
+Applica le query JMESPath reali e riproduce i formati di output json/tsv."""
+import json, sys
+import jmespath
+
+a = sys.argv[1:]
+
+def opt(*names, default=None):
+    for n in names:
+        if n in a:
+            return a[a.index(n) + 1]
+    return default
+
+words = []
+for i, x in enumerate(a):
+    if x.startswith('-'):
+        break
+    words.append(x)
+cmd = " ".join(words)
+sub = opt('--subscription', default='sub-A')
+A = sub == 'sub-A'
+L = 'westeurope'
+
+def res(n, prefix, **extra):
+    return [dict({"id": f"/{prefix}/{i}", "name": f"{prefix}{i}", "location": L, "resourceGroup": "rg"}, **extra)
+            for i in range(n)] if A else []
+
+R = None
+if cmd == 'account show':
+    R = {"id": sub, "name": {"sub-A": "Prod", "sub-B": "Sandbox"}.get(sub, sub)}
+elif cmd == 'account list':
+    R = [{"id": "sub-A", "name": "Prod", "state": "Enabled"},
+         {"id": "sub-B", "name": "Sandbox", "state": "Enabled"},
+         {"id": "sub-C", "name": "Old", "state": "Disabled"}]
+elif cmd == 'vm list':
+    assert '-d' in a, "serve -d per avere powerState"
+    R = (res(2, 'vm', powerState='VM running') + res(1, 'vmd', powerState='VM deallocated'))
+elif cmd == 'vmss list':
+    R = [{"name": "aks-pool1", "location": L, "orchestrationMode": "Uniform", "sku": {"capacity": 4}},
+         {"name": "web", "location": L, "orchestrationMode": "Uniform", "sku": {"capacity": 3}},
+         {"name": "flex", "location": L, "orchestrationMode": "Flexible", "sku": {"capacity": 2}}] if A else []
+elif cmd == 'aks list':
+    R = [{"name": "aks1", "location": L, "agentPoolProfiles": [{"name": "pool1", "count": 4}]}] if A else []
+elif cmd == 'functionapp list':
+    R = res(2, 'fa')
+elif cmd == 'functionapp function list':
+    if opt('-n', '--name') == 'fa1':
+        sys.stderr.write("ERROR: app is stopped\n"); sys.exit(1)
+    R = [{"name": f"fn{i}"} for i in range(20)]
+elif cmd == 'container list':
+    R = [{"name": "aci1", "location": L, "containers": [{"name": "a"}, {"name": "b"}, {"name": "c"}]}] if A else []
+elif cmd == 'containerapp list':
+    R = [{"name": f"ca{i}", "location": L, "properties": {"template": {"containers": [{"name": "app"}]}}}
+         for i in range(2)] if A else []
+elif cmd == 'acr list':
+    R = res(1, 'acr')
+elif cmd == 'acr repository list':
+    R = ["repo1"]
+elif cmd == 'acr manifest list-metadata':
+    R = [{"digest": f"sha256:{i}"} for i in range(100)]
+elif cmd == 'storage account list':
+    R = res(5, 'sa')
+elif cmd == 'sql server list':
+    R = res(1, 'sql')
+elif cmd == 'sql db list':
+    R = [{"name": "master"}, {"name": "db1"}, {"name": "db2"}, {"name": "db3"}]
+elif cmd == 'sql mi list':
+    R = []
+elif cmd == 'postgres flexible-server list':
+    R = res(1, 'pg')
+elif cmd == 'mysql flexible-server list':
+    R = []
+elif cmd == 'cosmosdb list':
+    R = res(1, 'cosmos')
+else:
+    sys.exit(f"mock az: comando non gestito {a}")
+
+q = opt('--query')
+if q:
+    R = jmespath.search(q, R)
+
+if opt('-o', '--output', default='json') == 'tsv':
+    if isinstance(R, list):
+        for x in R:
+            if isinstance(x, dict):
+                print("\t".join(map(str, x.values())))
+            elif isinstance(x, list):
+                print("\t".join(map(str, x)))
+            else:
+                print(x)
+    elif isinstance(R, dict):
+        print("\t".join(map(str, R.values())))
+    elif R is not None:
+        print(R)
+else:
+    print(json.dumps(R))
