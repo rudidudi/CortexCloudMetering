@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Mock della AWS CLI v2 per i test: dati sintetici con risultato noto.
-Applica le query JMESPath reali e riproduce i formati di output json/text."""
+"""AWS CLI v2 mock used by the tests: synthetic data with a known expected result.
+Applies real JMESPath queries and mimics the CLI json/text output formats."""
 import json, os, sys
 import jmespath
 
@@ -10,7 +10,7 @@ def opt(name, default=None):
     return a[a.index(name) + 1] if name in a else default
 
 def multi(name):
-    """Valori di un'opzione che accetta piu' argomenti (es. --filters A B)."""
+    """Values of an option that takes several arguments (e.g. --filters A B)."""
     if name not in a:
         return []
     out = []
@@ -22,13 +22,14 @@ def multi(name):
 
 svc, op = a[0], a[1]
 region = opt('--region', os.environ.get('AWS_DEFAULT_REGION', 'eu-west-1'))
-account = '111111111111' if not os.environ.get('AWS_SESSION_TOKEN') else os.environ['AWS_SESSION_TOKEN']
+# The mocked assume-role returns the target account id as session token
+account = os.environ.get('AWS_SESSION_TOKEN') or '111111111111'
 
 def inst(i, state='running', eks=False):
     tags = [{"Key": "eks:cluster-name", "Value": "c1"}] if eks else []
     return {"InstanceId": i, "State": {"Name": state}, "Tags": tags}
 
-# Reservation con piu' istanze per verificare che si contino le istanze e non le reservation
+# Reservations holding several instances, to verify that instances (not reservations) are counted
 EC2 = {
     "eu-west-1": [[inst('i1', eks=True), inst('i2', eks=True), inst('i3')], [inst('i4')], [inst('i5', 'stopped')]],
     "eu-south-1": [[inst('i6'), inst('i7')]],
@@ -39,8 +40,7 @@ R = None
 if svc == 'sts' and op == 'get-caller-identity':
     R = {"Account": account}
 elif svc == 'sts' and op == 'assume-role':
-    arn = opt('--role-arn')
-    acct = arn.split(':')[4]
+    acct = opt('--role-arn').split(':')[4]
     if acct == '333333333333':
         sys.stderr.write("An error occurred (AccessDenied) when calling the AssumeRole operation\n")
         sys.exit(254)
@@ -105,7 +105,7 @@ elif svc == 'dynamodb' and op == 'list-tables':
 elif svc == 'dynamodb' and op == 'describe-table':
     R = {"Table": {"TableSizeBytes": 200 * 10**9}}
 else:
-    sys.exit(f"mock aws: comando non gestito {a}")
+    sys.exit(f"aws mock: unhandled command {a}")
 
 q = opt('--query')
 if q:

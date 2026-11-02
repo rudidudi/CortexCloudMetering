@@ -1,146 +1,146 @@
-# Cortex Cloud Metering – script di sizing AWS e Azure
+# Cortex Cloud Metering – AWS and Azure sizing scripts
 
-Script per stimare i **workload Cortex Cloud** (Palo Alto Networks) di un ambiente AWS o Azure,
-applicando le regole della *Cortex Cloud Metering Guide*.
+Scripts to estimate **Cortex Cloud workloads** (Palo Alto Networks) for an AWS or Azure environment,
+applying the rules of the *Cortex Cloud Metering Guide*.
 
-Nascono come versione corretta degli script ufficiali
-[PaloAltoNetworks/cc-workload-sizing](https://github.com/PaloAltoNetworks/cc-workload-sizing),
-che contengono diversi errori di conteggio (vedi [Differenze rispetto agli script ufficiali](#differenze-rispetto-agli-script-ufficiali)).
+They started as a fixed version of the official
+[PaloAltoNetworks/cc-workload-sizing](https://github.com/PaloAltoNetworks/cc-workload-sizing) scripts,
+which contain several counting errors (see [Differences from the official scripts](#differences-from-the-official-scripts)).
 
-## Regole di conversione
+## Conversion rules
 
-| Tipo di risorsa | Risorse per 1 workload |
+| Resource type | Resources per workload |
 |---|---|
-| VM (con o senza container, nodi Kubernetes inclusi) | 1 |
-| CaaS – container gestiti (Fargate, App Runner, ACI, Container Apps) | 10 |
-| Funzioni serverless (Lambda, Azure Functions) | 25 |
-| Cloud bucket (S3, Storage account) | 10 |
-| Database PaaS (RDS, Aurora, Redshift, Azure SQL, PostgreSQL/MySQL flexible) | 2 |
-| DBaaS (DynamoDB) | 1 TB archiviato |
-| Immagini nei registry | 10 scansioni oltre la quota gratuita (10 per workload VM/CaaS) |
+| VM (with or without containers, Kubernetes nodes included) | 1 |
+| CaaS – managed containers (Fargate, App Runner, ACI, Container Apps) | 10 |
+| Serverless functions (Lambda, Azure Functions) | 25 |
+| Cloud buckets (S3, Storage accounts) | 10 |
+| PaaS databases (RDS, Aurora, Redshift, Azure SQL, PostgreSQL/MySQL flexible) | 2 |
+| DBaaS (DynamoDB) | 1 TB stored |
+| Registry images | 10 scans beyond the free quota (10 per VM/CaaS workload) |
 
-L'arrotondamento per eccesso viene applicato **sul totale di ogni categoria**, non account per account.
+Rounding up is applied **to the total of each category**, not per account or subscription.
 
-## Requisiti
+## Requirements
 
-- **AWS:** AWS CLI v2. Permessi `ReadOnlyAccess` (oppure `SecurityAudit` + `ViewOnlyAccess`) in ogni account;
-  in modalità Organization anche `organizations:ListAccounts` e `sts:AssumeRole`.
-- **Azure:** Azure CLI. Ruolo `Reader` sulle subscription (o sul Management Group). Per contare le immagini ACR
-  serve anche l'accesso al registry (`AcrPull` o `Reader`) e la sua raggiungibilità di rete.
-- **Non serve `jq`**: tutti i filtri usano `--query` (JMESPath) integrato nelle CLI.
+- **AWS:** AWS CLI v2. `ReadOnlyAccess` (or `SecurityAudit` + `ViewOnlyAccess`) in every account;
+  in Organization mode also `organizations:ListAccounts` and `sts:AssumeRole`.
+- **Azure:** Azure CLI. `Reader` role on the subscriptions (or on the Management Group). Counting ACR images
+  also requires access to the registry (`AcrPull` or `Reader`) and network reachability.
+- **No `jq` needed**: every filter uses the CLI's built-in `--query` (JMESPath).
 
-Il modo più semplice è lanciarli da **AWS CloudShell** o **Azure Cloud Shell**, dove le CLI sono già pronte.
+The easiest way to run them is from **AWS CloudShell** or **Azure Cloud Shell**, where the CLIs are ready to use.
 
-## Utilizzo
+## Usage
 
 ### AWS
 
 ```bash
 chmod +x aws/cc-sizing-aws.sh
 
-./aws/cc-sizing-aws.sh                  # account corrente, tutte le regioni abilitate
-./aws/cc-sizing-aws.sh -o               # tutti gli account dell'Organization
-./aws/cc-sizing-aws.sh -o -r MioRuolo   # Organization con un ruolo cross-account diverso
-./aws/cc-sizing-aws.sh -n eu-west-1     # una sola regione
-./aws/cc-sizing-aws.sh -s               # include anche le EC2 stopped
+./aws/cc-sizing-aws.sh                   # current account, all enabled regions
+./aws/cc-sizing-aws.sh -o                # every account in the Organization
+./aws/cc-sizing-aws.sh -o -r MyRole      # Organization with a different cross-account role
+./aws/cc-sizing-aws.sh -n eu-west-1      # single region
+./aws/cc-sizing-aws.sh -s                # also include stopped EC2 instances
 ```
 
-| Opzione | Descrizione |
+| Option | Description |
 |---|---|
-| `-o` | Modalità Organization: scansiona tutti gli account `ACTIVE` (da lanciare dal management account) |
-| `-r <ruolo>` | Ruolo da assumere negli account membri (default `OrganizationAccountAccessRole`) |
-| `-n <regione>` | Una sola regione |
-| `-s` | Include le istanze EC2 `stopped` |
-| `-f <file.csv>` | Nome del CSV di dettaglio |
+| `-o` | Organization mode: scans every `ACTIVE` account (run it from the management account) |
+| `-r <role>` | Role to assume in member accounts (default `OrganizationAccountAccessRole`) |
+| `-n <region>` | Single region |
+| `-s` | Include `stopped` EC2 instances |
+| `-f <file.csv>` | Name of the detailed CSV file |
 
 ### Azure
 
 ```bash
 chmod +x azure/cc-sizing-azure.sh
 
-./azure/cc-sizing-azure.sh                  # tutte le subscription abilitate
-./azure/cc-sizing-azure.sh -u <sub-id>      # una sola subscription
-./azure/cc-sizing-azure.sh -n westeurope    # una sola location
-./azure/cc-sizing-azure.sh -s               # include anche le VM deallocate
+./azure/cc-sizing-azure.sh                   # every enabled subscription
+./azure/cc-sizing-azure.sh -u <sub-id>       # single subscription
+./azure/cc-sizing-azure.sh -n westeurope     # single location
+./azure/cc-sizing-azure.sh -s                # also include deallocated VMs
 ```
 
-| Opzione | Descrizione |
+| Option | Description |
 |---|---|
-| `-u <id\|nome>` | Una sola subscription |
-| `-n <location>` | Una sola location |
-| `-s` | Include le VM deallocate |
-| `-f <file.csv>` | Nome del CSV di dettaglio |
+| `-u <id\|name>` | Single subscription |
+| `-n <location>` | Single location |
+| `-s` | Include deallocated VMs |
+| `-f <file.csv>` | Name of the detailed CSV file |
 
 ## Output
 
-Ogni script stampa una tabella di riepilogo con risorse, rapporto e workload per categoria, e genera:
+Each script prints a summary table with resources, ratio and workloads per category, and creates:
 
-- un **CSV** con il dettaglio per account/regione (AWS) o per subscription (Azure), da aprire in Excel;
-- un file **`-errori.log`** se qualche chiamata non è riuscita (permessi mancanti, ruolo non assumibile,
-  registry non raggiungibile…). In quel caso il riepilogo lo segnala: i conteggi interessati valgono 0.
+- a **CSV** file with per account/region (AWS) or per subscription (Azure) details, ready for Excel;
+- an **`-errors.log`** file if any call failed (missing permissions, role not assumable,
+  unreachable registry…). The summary reports it, and the affected counts are 0.
 
-## Cosa viene contato
+## What is counted
 
 ### AWS
 
-| Categoria | Cosa si conta |
+| Category | What is counted |
 |---|---|
-| VM | Istanze EC2 `running` in tutte le regioni (le **istanze**, non le reservation). I nodi EKS/ECS su EC2 sono già inclusi e vengono mostrati a parte solo come informazione |
-| CaaS | Container nei task ECS **Fargate** in esecuzione + servizi App Runner |
-| Serverless | Funzioni Lambda in tutte le regioni |
-| Bucket | Bucket S3 |
-| DB PaaS | Tutte le istanze RDS (MySQL, PostgreSQL, MariaDB, Oracle, SQL Server, **Aurora**, DocumentDB, Neptune), cluster Aurora Serverless v1, cluster Redshift |
-| DBaaS | Tabelle DynamoDB, convertite in TB archiviati |
-| Immagini | Immagini (manifest) nei repository ECR, al netto della quota gratuita |
+| VM | `running` EC2 instances in every region (**instances**, not reservations). EKS/ECS nodes on EC2 are already included and shown separately for information only |
+| CaaS | Containers in running ECS **Fargate** tasks + App Runner services |
+| Serverless | Lambda functions in every region |
+| Buckets | S3 buckets |
+| PaaS DB | Every RDS instance (MySQL, PostgreSQL, MariaDB, Oracle, SQL Server, **Aurora**, DocumentDB, Neptune), Aurora Serverless v1 clusters, Redshift clusters |
+| DBaaS | DynamoDB tables, converted into TB stored |
+| Images | Images (manifests) in ECR repositories, net of the free quota |
 
 ### Azure
 
-| Categoria | Cosa si conta |
+| Category | What is counted |
 |---|---|
-| VM | VM `running` + istanze dei VM Scale Set *Uniform*. I nodi AKS sono istanze VMSS: inclusi una volta sola e mostrati a parte |
-| CaaS | Container nei container group ACI + container definiti nelle Container Apps |
-| Serverless | Singole funzioni dentro ogni Function App (se l'app non è leggibile conta 1 e lo segnala) |
-| Bucket | Storage account |
-| DB PaaS | Database Azure SQL (escluso `master`), SQL Managed Instance, PostgreSQL e MySQL flexible server |
-| Immagini | Manifest nei repository ACR, al netto della quota gratuita |
+| VM | `running` VMs + *Uniform* VM Scale Set instances. AKS nodes are VMSS instances: counted once and shown separately |
+| CaaS | Containers in ACI container groups + containers defined in Container Apps |
+| Serverless | Individual functions inside each Function App (an unreadable app counts as 1 and is reported) |
+| Buckets | Storage accounts |
+| PaaS DB | Azure SQL databases (excluding `master`), SQL Managed Instances, PostgreSQL and MySQL flexible servers |
+| Images | Manifests in ACR repositories, net of the free quota |
 
-## Limiti noti – da completare a mano o da verificare con Palo Alto
+## Known limitations – complete manually or confirm with Palo Alto
 
-- Non calcolati: **utenti SaaS**, **asset Cloud ASM** non gestiti, pod EKS su Fargate e pod su virtual node AKS
-  (servono `kubectl`), Amazon Keyspaces, **Cosmos DB** (DBaaS a TB: lo script ne indica il numero di account).
-- **Aurora** è contato per istanza (writer + reader): verificare se Palo Alto lo conta per cluster.
-- **Azure SQL** è contato per database, non per server logico (il numero di server è comunque riportato).
-- Gli **storage account** Azure sono usati come equivalente dei bucket.
-- Lo script fotografa il momento in cui viene lanciato: con autoscaling conviene ripeterlo in orari diversi
-  o confrontarlo con la media su 30 giorni.
+- Not counted: **SaaS users**, unmanaged **Cloud ASM assets**, EKS pods on Fargate and pods on AKS virtual nodes
+  (`kubectl` required), Amazon Keyspaces, **Cosmos DB** (DBaaS per TB: the script reports the number of accounts).
+- **Aurora** is counted per instance (writer + readers): check whether Palo Alto counts it per cluster.
+- **Azure SQL** is counted per database, not per logical server (the number of servers is reported anyway).
+- Azure **storage accounts** are used as the bucket equivalent.
+- The scripts take a snapshot at run time: with autoscaling, run them at different times
+  or compare with the 30-day average.
 
-## Differenze rispetto agli script ufficiali
+## Differences from the official scripts
 
-Problemi trovati in `PaloAltoNetworks/cc-workload-sizing` (versione del 13/05/2026) e corretti qui:
+Issues found in `PaloAltoNetworks/cc-workload-sizing` (version of 2026-05-13) and fixed here:
 
 **AWS**
-- EC2 contava le *reservation* invece delle istanze (sottostima).
-- Contava sempre anche le istanze stopped.
-- I nodi EKS venivano sommati una seconda volta alle EC2, con una formula cumulativa errata.
-- Lambda, ECS, ECR, RDS, DynamoDB, Redshift ed EKS venivano letti solo nella regione di default.
-- Fargate sempre a 0 (confronto con `"Fargate"` invece di `"FARGATE"`).
-- Immagini container sempre a 0 (variabile inesistente).
-- Aurora mai contato (filtro sul solo motore legacy `aurora`).
-- DynamoDB contato come PaaS per tabella invece che come DBaaS a TB.
-- In modalità Organization il PaaS veniva sommato in modo cumulativo e il contatore Lambda non si azzerava.
-- Gli errori delle chiamate venivano ignorati.
+- EC2 counted *reservations* instead of instances (undercount).
+- Stopped instances were always counted.
+- EKS nodes were added a second time on top of EC2, with a wrong cumulative formula.
+- Lambda, ECS, ECR, RDS, DynamoDB, Redshift and EKS were read only in the default region.
+- Fargate always 0 (compared against `"Fargate"` instead of `"FARGATE"`).
+- Container images always 0 (undefined variable).
+- Aurora never counted (filter on the legacy `aurora` engine only).
+- DynamoDB counted as PaaS per table instead of DBaaS per TB.
+- In Organization mode PaaS was summed cumulatively and the Lambda counter was never reset.
+- API call errors were silently ignored.
 
 **Azure**
-- Ogni immagine ACR valeva 1 workload, senza quota gratuita né divisione per 10.
-- Una subscription senza VM contava comunque 1 VM.
-- Contava sempre anche le VM deallocate; ignorava i VM Scale Set non AKS.
-- Contava le Function App invece delle funzioni, e i container group invece dei container.
-- Arrotondamento per subscription (sovrastima con molte subscription piccole).
-- Usava i comandi dei *Single Server* PostgreSQL/MySQL/MariaDB, ormai dismessi.
+- Every ACR image counted as 1 workload, with no free quota and no division by 10.
+- A subscription with no VMs still counted 1 VM.
+- Deallocated VMs were always counted; non-AKS VM Scale Sets were ignored.
+- Function Apps were counted instead of functions, and container groups instead of containers.
+- Rounding per subscription (overcount with many small subscriptions).
+- Used the retired PostgreSQL/MySQL/MariaDB *Single Server* commands.
 
-## Test
+## Tests
 
-I test eseguono gli script contro CLI simulate (`tests/mock/`) con dati di cui è noto il risultato corretto:
+The tests run the scripts against mocked CLIs (`tests/mock/`) whose expected result is known:
 
 ```bash
 pip install jmespath
@@ -149,5 +149,5 @@ pip install jmespath
 
 ## Disclaimer
 
-Strumento non ufficiale, fornito per stime preliminari. Il conteggio di riferimento ai fini del licensing
-è quello concordato con Palo Alto Networks.
+Unofficial tool, provided for preliminary estimates. The reference count for licensing purposes
+is the one agreed with Palo Alto Networks.
