@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# Based on cc-workload-sizing-aws.sh from PaloAltoNetworks/cc-workload-sizing (commit 71b5aa0), with fixes.
+# Every regional service (EC2, Lambda, ECS, App Runner, ECR, EFS, Aurora, RDS, DynamoDB, Redshift) is listed
+# in every region enabled in each account. See the README for the full list of changes and open issues.
+
 # Check for jq dependency
 if ! command -v jq &> /dev/null; then
     echo "Error: jq is not installed. Please install jq to run this script."
@@ -18,6 +22,29 @@ function check_error {
         fi
         exit $exit_code
     fi
+}
+
+# Run an AWS CLI listing in every region to scan (scan_regions) and print the IDs it returns, one per line.
+# The regions with results are reported on stderr, so $(...) captures only the IDs.
+# A region where the service is not offered is skipped; any other failure is reported as a warning.
+function list_in_regions {
+    local label=$1; shift
+    local r out n err
+    err=$(mktemp)
+    for r in $scan_regions; do
+        if ! out=$("$@" --region "$r" --output text 2>"$err"); then
+            if ! grep -q "Could not connect to the endpoint" "$err"; then
+                echo "    Warning: could not list $label in $r: $(grep -m 1 . "$err")" >&2
+            fi
+            continue
+        fi
+        n=$(echo "$out" | wc -w)
+        if (( n > 0 )); then
+            echo "    Region $r: $n $label" >&2
+            echo "$out" | tr -s '[:space:]' '\n'
+        fi
+    done
+    rm -f "$err"
 }
 
 function printHelp {
@@ -154,27 +181,20 @@ count_resources() {
 
     echo ""
     echo "Counting Cloud Security resources in account: $account_id"
-       
-    # Count EC2 instances
+
+    # Regions to scan in this account: the one given with -n, or every region enabled in this account.
+    # Every regional service below is listed in each of these regions, not only in the CLI's default region.
     if [[ "${REGION}" ]]; then
-        ec2_count=$(aws ec2 describe-instances --region $REGION --filters "Name=instance-state-name,Values=$STATE" --query "Reservations[].Instances[]" --output json | jq 'length')
-        check_error $? "Failed to describe EC2 instances in region $REGION for account $account_id."
-    else
-        echo "  Counting EC2 instances across all accessible regions..."
-        ec2_count=0
-        # Use the activeRegions variable fetched earlier
-        for r in $activeRegions; do
-            # Capture stderr to avoid cluttering output for regions where API might not be enabled/accessible
-            count_in_region=$(aws ec2 describe-instances --region "$r" --filters "Name=instance-state-name,Values=$STATE" --query "Reservations[].Instances[]" --output json 2>/dev/null | jq 'length')
-            if [ $? -eq 0 ] && [[ "$count_in_region" =~ ^[0-9]+$ ]]; then
-                # Only print if count > 0 to reduce noise
-                if [ "$count_in_region" -gt 0 ]; then
-                    echo "    Region $r: $count_in_region instances"
-                fi
-                ec2_count=$((ec2_count + count_in_region))
-            fi
-        done
+        scan_regions="$REGION"
+    elif ! scan_regions=$(aws ec2 describe-regions --query "Regions[].RegionName" --output text 2>/dev/null); then
+        echo "  Warning: could not list the regions enabled in account $account_id, scanning the regions found at start instead."
+        scan_regions="$activeRegions"
     fi
+    echo "  Regions to scan: $(echo $scan_regions | wc -w)"
+
+    # Count EC2 instances
+    echo "  Counting EC2 instances..."
+    ec2_count=$(list_in_regions "EC2 instances" aws ec2 describe-instances --filters "Name=instance-state-name,Values=$STATE" --query "Reservations[].Instances[].InstanceId" | wc -l)
     echo "  $(tput bold)$(tput setaf 2)VM Workloads: $ec2_count$(tput sgr0)"
     total_ec2_instances=$((total_ec2_instances + ec2_count))
     total_ec2_workloads=$total_ec2_instances
@@ -185,10 +205,9 @@ count_resources() {
     echo ""
     echo "  Counting serverless functions in AWS..."
 
-    # Count all Lambda functions with a single call. Active and inactive functions are both counted,
+    # Count all Lambda functions with one call per region. Active and inactive functions are both counted,
     # so there is no need to look up each function's state.
-    # --output text prints the ARNs separated by tabs, so count words, not lines.
-    total_functions=$(aws lambda list-functions --query 'Functions[].FunctionArn' --output text | wc -w)
+    total_functions=$(list_in_regions "Lambda functions" aws lambda list-functions --query 'Functions[].FunctionArn' | wc -l)
 
     if (( total_functions == 0 )); then
         echo "    No serverless functions found in your AWS account."
@@ -212,20 +231,22 @@ count_resources() {
     apprunner_services=0
     total_managed_containers=0
 
-    # List all ECS clusters
+    # List the ECS clusters in every region to scan
     # We'll then iterate through each cluster to find Fargate services.
-    ecs_clusters=$(aws ecs list-clusters --query 'clusterArns[]' --output text)
+    ecs_clusters=$(list_in_regions "ECS clusters" aws ecs list-clusters --query 'clusterArns[]')
 
     if [ -z "$ecs_clusters" ]; then
         echo "    No ECS clusters found."
         else
             for cluster_arn in $ecs_clusters; do
                 cluster_name=$(echo "$cluster_arn" | awk -F'/' '{print $NF}')
-                echo "    Checking cluster: $cluster_name"
+                # The cluster ARN (arn:aws:ecs:<region>:<account>:cluster/<name>) carries its region
+                cluster_region=$(echo "$cluster_arn" | cut -d: -f4)
+                echo "    Checking cluster: $cluster_name ($cluster_region)"
 
                 # List services within the cluster
                 # We need to describe each service to check its launch type (Fargate vs. EC2)
-                service_arns=$(aws ecs list-services --cluster "$cluster_arn" --query 'serviceArns[]' --output text)
+                service_arns=$(aws ecs list-services --region "$cluster_region" --cluster "$cluster_arn" --query 'serviceArns[]' --output text)
 
                 if [ -z "$service_arns" ]; then
                     echo "      No services found in this cluster."
@@ -233,7 +254,7 @@ count_resources() {
                 for service_arn in $service_arns; do
                     # Get the launch type and the capacity providers: services that use a capacity provider
                     # strategy have no launch type, so Fargate shows up as the FARGATE or FARGATE_SPOT provider
-                    service_details=$(aws ecs describe-services --cluster "$cluster_arn" --services "$service_arn" --query 'services[0].[launchType, capacityProviderStrategy[].capacityProvider][]' --output text)
+                    service_details=$(aws ecs describe-services --region "$cluster_region" --cluster "$cluster_arn" --services "$service_arn" --query 'services[0].[launchType, capacityProviderStrategy[].capacityProvider][]' --output text)
 
                     if echo "$service_details" | grep -Eqw 'FARGATE|FARGATE_SPOT'; then
                      ecs_fargate_services=$((ecs_fargate_services + 1))
@@ -245,8 +266,8 @@ count_resources() {
             done
         fi
 
-        # List all App Runner services
-        apprunner_service_arns=$(aws apprunner list-services --query 'ServiceSummaryList[].ServiceArn' --output text)
+        # List the App Runner services in every region to scan (regions without App Runner are skipped)
+        apprunner_service_arns=$(list_in_regions "App Runner services" aws apprunner list-services --query 'ServiceSummaryList[].ServiceArn')
 
         if [ -z "$apprunner_service_arns" ]; then
         echo "    No AWS App Runner services found."
@@ -273,25 +294,26 @@ count_resources() {
         # Initialize a counter for the total number of images across all repositories
         total_images_across_all_registries=0
 
-        # List all ECR repositories
-        # The --query 'repositories[].repositoryName' extracts only the names of the repositories
-        # The --output text formats the output as plain text, one name per line
-        repository_names=$(aws ecr describe-repositories --query 'repositories[].repositoryName' --output text)
+        # List the ECR repositories in every region to scan, one ARN per line
+        # The ARN (arn:aws:ecr:<region>:<account>:repository/<name>) carries the region and the name
+        repository_arns=$(list_in_regions "ECR repositories" aws ecr describe-repositories --query 'repositories[].repositoryArn')
 
         # Check if any repositories were found
-        if [ -z "$repository_names" ]; then
+        if [ -z "$repository_arns" ]; then
         echo "    No ECR repositories found in your AWS account."
         else
 
-            # Loop through each repository name
-            for repo_name in $repository_names; do
-            #echo "Repository: $repo_name"
+            # Loop through each repository
+            for repo_arn in $repository_arns; do
+            repo_region=$(echo "$repo_arn" | cut -d: -f4)
+            # The name can contain slashes (e.g. team/app), so keep everything after "repository/"
+            repo_name=${repo_arn#*:repository/}
 
             # Count images in the current repository
             # We use describe-images to get a list of image digests (unique identifiers for images).
             # We then use wc -l to count the number of lines, which corresponds to the number of images.
             # The || true part prevents the script from exiting if a repository has no images and describe-images returns an empty list.
-            image_count=$(aws ecr describe-images --repository-name "$repo_name" --query 'imageDetails[].imageDigest' --output text | wc -l)
+            image_count=$(aws ecr describe-images --region "$repo_region" --repository-name "$repo_name" --query 'imageDetails[].imageDigest' --output text | wc -l)
 
             # Add the current repository's image count to the total
             total_images_across_all_registries=$((total_images_across_all_registries + image_count))
@@ -300,7 +322,7 @@ count_resources() {
             total_container_image_workloads=$((total_container_image_workloads + container_image_workload))
                 done
 
-            echo "  Total ECR Repositories Found: $(echo "$repository_names" | wc -l)"
+            echo "  Total ECR Repositories Found: $(echo "$repository_arns" | wc -l)"
             echo "  Total Images Across All Registries: $total_images_across_all_registries"
         fi
         echo "  $(tput bold)$(tput setaf 2)Container Image Workloads: $total_container_image_workloads$(tput sgr0)"
@@ -308,8 +330,10 @@ count_resources() {
 
         # Count S3 buckets
         echo "  Counting up bucket workloads..."
+        # list-buckets is global: it returns the buckets of every region from any endpoint.
+        # With -n, --bucket-region keeps only the buckets in the requested region.
         if [[ "${REGION}" ]]; then
-            s3_count=$(aws s3api list-buckets --region $REGION --query "Buckets[*].Name" --output text | wc -w)
+            s3_count=$(aws s3api list-buckets --bucket-region "$REGION" --query "Buckets[*].Name" --output text | wc -w)
             check_error $? "Failed to list S3 buckets in region $REGION for account $account_id."
         else
             s3_count=$(aws s3api list-buckets --query "Buckets[*].Name" --output text | wc -w)
@@ -327,57 +351,27 @@ count_resources() {
 
         echo "  Counting up PaaS workloads..."
         # Count EFS file systems
-        if [[ "${REGION}" ]]; then
-            efs_count=$(aws efs describe-file-systems --region $REGION --query "FileSystems[*].FileSystemId" --output text | wc -w)
-            check_error $? "Failed to describe EFS file systems in region $REGION for account $account_id."
-        else
-            efs_count=$(aws efs describe-file-systems --query "FileSystems[*].FileSystemId" --output text | wc -w)
-            check_error $? "Failed to describe EFS file systems (all regions) for account $account_id."
-        fi  
+        efs_count=$(list_in_regions "EFS file systems" aws efs describe-file-systems --query "FileSystems[*].FileSystemId" | wc -l)
         echo "    EFS file systems: $efs_count"
         total_efs=$((total_efs + efs_count))
 
         # Count Aurora clusters
-        if [[ "${REGION}" ]]; then
-            aurora_count=$(aws rds describe-db-clusters --region $REGION --query "DBClusters[?starts_with(Engine, 'aurora')].DBClusterIdentifier" --output text | wc -w)
-            check_error $? "Failed to describe Aurora clusters in region $REGION for account $account_id."
-        else
-            aurora_count=$(aws rds describe-db-clusters --query "DBClusters[?starts_with(Engine, 'aurora')].DBClusterIdentifier" --output text | wc -w)
-            check_error $? "Failed to describe Aurora clusters (all regions) for account $account_id."
-        fi         
+        aurora_count=$(list_in_regions "Aurora clusters" aws rds describe-db-clusters --query "DBClusters[?starts_with(Engine, 'aurora')].DBClusterIdentifier" | wc -l)
         echo "    Aurora clusters: $aurora_count"
         total_aurora=$((total_aurora + aurora_count))
 
         # Count RDS instances of every engine except Aurora (counted per cluster above), DocumentDB and Neptune
-        if [[ "${REGION}" ]]; then
-            rds_count=$(aws rds describe-db-instances --region $REGION --query "DBInstances[?!starts_with(Engine, 'aurora') && Engine!='docdb' && Engine!='neptune'].DBInstanceIdentifier" --output text | wc -w)
-            check_error $? "Failed to describe RDS instances in region $REGION for account $account_id."
-        else
-            rds_count=$(aws rds describe-db-instances --query "DBInstances[?!starts_with(Engine, 'aurora') && Engine!='docdb' && Engine!='neptune'].DBInstanceIdentifier" --output text | wc -w)
-            check_error $? "Failed to describe RDS instances (all regions) for account $account_id."
-        fi   
+        rds_count=$(list_in_regions "RDS instances" aws rds describe-db-instances --query "DBInstances[?!starts_with(Engine, 'aurora') && Engine!='docdb' && Engine!='neptune'].DBInstanceIdentifier" | wc -l)
         echo "    RDS instances (MySQL, MariaDB, PostgreSQL, Oracle, SQL Server, Db2): $rds_count"
         total_rds=$((total_rds + rds_count))
 
         # Count DynamoDB tables
-        if [[ "${REGION}" ]]; then
-            dynamodb_count=$(aws dynamodb list-tables --region $REGION --query "TableNames" --output text | wc -w)
-            check_error $? "Failed to list DynamoDB tables in region $REGION for account $account_id."
-        else
-            dynamodb_count=$(aws dynamodb list-tables --query "TableNames" --output text | wc -w)
-            check_error $? "Failed to list DynamoDB tables (all regions) for account $account_id."
-        fi 
+        dynamodb_count=$(list_in_regions "DynamoDB tables" aws dynamodb list-tables --query "TableNames" | wc -l)
         echo "    DynamoDB tables: $dynamodb_count"
         total_dynamodb=$((total_dynamodb + dynamodb_count))
 
         # Count Redshift clusters
-        if [[ "${REGION}" ]]; then
-            redshift_count=$(aws redshift describe-clusters --region $REGION --query "Clusters[*].ClusterIdentifier" --output text | wc -w)
-            check_error $? "Failed to describe Redshift clusters in region $REGION for account $account_id."
-        else
-            redshift_count=$(aws redshift describe-clusters --query "Clusters[*].ClusterIdentifier" --output text | wc -w)
-            check_error $? "Failed to describe Redshift clusters (all regions) for account $account_id."
-        fi 
+        redshift_count=$(list_in_regions "Redshift clusters" aws redshift describe-clusters --query "Clusters[*].ClusterIdentifier" | wc -l)
         echo "    Redshift clusters: $redshift_count"
         total_redshift=$((total_redshift + redshift_count))
 

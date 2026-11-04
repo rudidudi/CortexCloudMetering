@@ -1,166 +1,130 @@
-# Cortex Cloud Metering – AWS and Azure sizing scripts
+# Cortex Cloud Metering – workload sizing scripts
 
-Scripts to estimate **Cortex Cloud workloads** (Palo Alto Networks) for an AWS or Azure environment,
-applying the rules of the *Cortex Cloud Metering Guide*.
+Scripts to estimate **Cortex Cloud workloads** (Palo Alto Networks) for AWS, Azure and GCP,
+following the rules of the *Cortex Cloud Metering Guide*.
 
-They started as a fixed version of the official
-[PaloAltoNetworks/cc-workload-sizing](https://github.com/PaloAltoNetworks/cc-workload-sizing) scripts,
-which contain several counting errors (see [Differences from the official scripts](#differences-from-the-official-scripts)).
+They are based on the official
+[PaloAltoNetworks/cc-workload-sizing](https://github.com/PaloAltoNetworks/cc-workload-sizing) scripts
+(commit `71b5aa0`, 2026-05-13).
 
 ## Repository layout
 
-**Status: work in progress.** Everything in this repository is still being worked on.
+**Status: work in progress.**
 
-Each cloud provider has its own folder (`aws/`, `azure/`, `gcp/`) with two subfolders:
-
-| Folder | Content |
-|---|---|
-| `<provider>/script/` | The new sizing script, rewritten to follow the Cortex Cloud Metering Guide |
-| `<provider>/original/` | The official script from [PaloAltoNetworks/cc-workload-sizing](https://github.com/PaloAltoNetworks/cc-workload-sizing) (commit `71b5aa0`, 2026-05-13), with the fixes applied one at a time |
-
-Today `original/` still holds the official scripts unchanged, and the new AWS and Azure scripts are still at
-`aws/cc-sizing-aws.sh` and `azure/cc-sizing-azure.sh`: they will move to `aws/script/` and `azure/script/`.
-The new GCP script, `gcp/cc-sizing-gcp.sh`, is an empty placeholder for now.
+| Folder | Script | State |
+|---|---|---|
+| `aws/` | `cc-workload-sizing-aws.sh` | Official script with fixes (see [AWS: changes from the official script](#aws-changes-from-the-official-script)) |
+| `azure/` | `cc-workload-sizing-azure.sh` | Official script, unchanged |
+| `gcp/` | `cc-workload-sizing-gcp.sh` | Official script, unchanged |
 
 ## Conversion rules
 
-| Resource type | Resources per workload |
-|---|---|
-| VM (with or without containers, Kubernetes nodes included) | 1 |
-| CaaS – managed containers (Fargate, App Runner, ACI, Container Apps) | 10 |
-| Serverless functions (Lambda, Azure Functions) | 25 |
-| Cloud buckets (S3, Storage accounts) | 10 |
-| PaaS databases (RDS, Aurora, Redshift, Azure SQL, PostgreSQL/MySQL flexible) | 2 |
-| DBaaS (DynamoDB) | 1 TB stored |
-| Registry images | 10 scans beyond the free quota (10 per VM/CaaS workload) |
+From the Cortex Cloud Metering Guide:
 
-Rounding up is applied **to the total of each category**, not per account or subscription.
+| Resource type | 1 workload = |
+|---|---|
+| VMs, with or without containers | 1 VM |
+| CaaS (managed containers) | 10 containers |
+| Serverless functions | 25 functions |
+| Cloud buckets | 10 buckets |
+| PaaS databases | 2 databases |
+| DBaaS | 1 TB stored |
+| SaaS users | 10 users |
+| Cloud ASM unmanaged assets | 4 assets |
+| Container images | 10 free scans per deployed VM or CaaS workload, then 10 scans = 1 workload |
+
+Logs are not workloads: 1 GB of logs is included every 50 workloads.
 
 ## Requirements
 
-- **AWS:** AWS CLI v2. `ReadOnlyAccess` (or `SecurityAudit` + `ViewOnlyAccess`) in every account;
-  in Organization mode also `organizations:ListAccounts` and `sts:AssumeRole`.
-- **Azure:** Azure CLI. `Reader` role on the subscriptions (or on the Management Group). Counting ACR images
-  also requires access to the registry (`AcrPull` or `Reader`) and network reachability.
-- **No `jq` needed**: every filter uses the CLI's built-in `--query` (JMESPath).
+| Cloud | Tools | Permissions |
+|---|---|---|
+| AWS | AWS CLI v2, `jq` | Read-only access in every account. With `-o`, also `organizations:ListAccounts` and a role the script can assume in each member account |
+| Azure | Azure CLI, `jq` | `Reader` on the subscriptions |
+| GCP | `gcloud`, `jq` | Cloud Asset Inventory API enabled, `roles/cloudasset.viewer` |
 
-The easiest way to run them is from **AWS CloudShell** or **Azure Cloud Shell**, where the CLIs are ready to use.
+The easiest way to run them is from **AWS CloudShell**, **Azure Cloud Shell** or **Google Cloud Shell**,
+where the CLI and `jq` are already installed.
 
 ## Usage
 
 ### AWS
 
 ```bash
-chmod +x aws/cc-sizing-aws.sh
-
-./aws/cc-sizing-aws.sh                   # current account, all enabled regions
-./aws/cc-sizing-aws.sh -o                # every account in the Organization
-./aws/cc-sizing-aws.sh -o -r MyRole      # Organization with a different cross-account role
-./aws/cc-sizing-aws.sh -n eu-west-1      # single region
-./aws/cc-sizing-aws.sh -s                # also include stopped EC2 instances
+curl -sO https://raw.githubusercontent.com/rudidudi/CortexCloudMetering/main/aws/cc-workload-sizing-aws.sh
+chmod +x cc-workload-sizing-aws.sh
+./cc-workload-sizing-aws.sh
 ```
 
 | Option | Description |
 |---|---|
-| `-o` | Organization mode: scans every `ACTIVE` account (run it from the management account) |
-| `-r <role>` | Role to assume in member accounts (default `OrganizationAccountAccessRole`) |
-| `-n <region>` | Single region |
-| `-s` | Include `stopped` EC2 instances |
-| `-f <file.csv>` | Name of the detailed CSV file |
+| `-h` | Show the help |
+| `-n <region>` | Scan a single region |
+| `-o` | Organization mode: scan every `ACTIVE` account (run it from the management account) |
+| `-r <role>` | Role to assume in each account with `-o` (default `OrganizationAccountAccessRole`) |
+| `-s` | Also count stopped EC2 instances |
 
 ### Azure
 
 ```bash
-chmod +x azure/cc-sizing-azure.sh
-
-./azure/cc-sizing-azure.sh                   # every enabled subscription
-./azure/cc-sizing-azure.sh -u <sub-id>       # single subscription
-./azure/cc-sizing-azure.sh -n westeurope     # single location
-./azure/cc-sizing-azure.sh -s                # also include deallocated VMs
+curl -sO https://raw.githubusercontent.com/rudidudi/CortexCloudMetering/main/azure/cc-workload-sizing-azure.sh
+chmod +x cc-workload-sizing-azure.sh
+./cc-workload-sizing-azure.sh
 ```
 
 | Option | Description |
 |---|---|
-| `-u <id\|name>` | Single subscription |
-| `-n <location>` | Single location |
-| `-s` | Include deallocated VMs |
-| `-f <file.csv>` | Name of the detailed CSV file |
+| `-h` | Show the help |
+| `-n <location>` | Scan a single location |
+| `-s` | Also count stopped (deallocated) VMs. Note: the official script already counts them by default |
 
-## Output
-
-Each script prints a summary table with resources, ratio and workloads per category, and creates:
-
-- a **CSV** file with per account/region (AWS) or per subscription (Azure) details, ready for Excel;
-- an **`-errors.log`** file if any call failed (missing permissions, role not assumable,
-  unreachable registry…). The summary reports it, and the affected counts are 0.
-
-## What is counted
-
-### AWS
-
-| Category | What is counted |
-|---|---|
-| VM | `running` EC2 instances in every region (**instances**, not reservations). EKS/ECS nodes on EC2 are already included and shown separately for information only |
-| CaaS | Containers in running ECS **Fargate** tasks + App Runner services |
-| Serverless | Lambda functions in every region |
-| Buckets | S3 buckets |
-| PaaS DB | Every RDS instance (MySQL, PostgreSQL, MariaDB, Oracle, SQL Server, **Aurora**, DocumentDB, Neptune), Aurora Serverless v1 clusters, Redshift clusters |
-| DBaaS | DynamoDB tables, converted into TB stored |
-| Images | Images (manifests) in ECR repositories, net of the free quota |
-
-### Azure
-
-| Category | What is counted |
-|---|---|
-| VM | `running` VMs + *Uniform* VM Scale Set instances. AKS nodes are VMSS instances: counted once and shown separately |
-| CaaS | Containers in ACI container groups + containers defined in Container Apps |
-| Serverless | Individual functions inside each Function App (an unreadable app counts as 1 and is reported) |
-| Buckets | Storage accounts |
-| PaaS DB | Azure SQL databases (excluding `master`), SQL Managed Instances, PostgreSQL and MySQL flexible servers |
-| Images | Manifests in ACR repositories, net of the free quota |
-
-## Known limitations – complete manually or confirm with Palo Alto
-
-- Not counted: **SaaS users**, unmanaged **Cloud ASM assets**, EKS pods on Fargate and pods on AKS virtual nodes
-  (`kubectl` required), Amazon Keyspaces, **Cosmos DB** (DBaaS per TB: the script reports the number of accounts).
-- **Aurora** is counted per instance (writer + readers): check whether Palo Alto counts it per cluster.
-- **Azure SQL** is counted per database, not per logical server (the number of servers is reported anyway).
-- Azure **storage accounts** are used as the bucket equivalent.
-- The scripts take a snapshot at run time: with autoscaling, run them at different times
-  or compare with the 30-day average.
-
-## Differences from the official scripts
-
-Issues found in `PaloAltoNetworks/cc-workload-sizing` (version of 2026-05-13) and fixed here:
-
-**AWS**
-- EC2 counted *reservations* instead of instances (undercount).
-- Stopped instances were always counted.
-- EKS nodes were added a second time on top of EC2, with a wrong cumulative formula.
-- Lambda, ECS, ECR, RDS, DynamoDB, Redshift and EKS were read only in the default region.
-- Fargate always 0 (compared against `"Fargate"` instead of `"FARGATE"`).
-- Container images always 0 (undefined variable).
-- Aurora never counted (filter on the legacy `aurora` engine only).
-- DynamoDB counted as PaaS per table instead of DBaaS per TB.
-- In Organization mode PaaS was summed cumulatively and the Lambda counter was never reset.
-- API call errors were silently ignored.
-
-**Azure**
-- Every ACR image counted as 1 workload, with no free quota and no division by 10.
-- A subscription with no VMs still counted 1 VM.
-- Deallocated VMs were always counted; non-AKS VM Scale Sets were ignored.
-- Function Apps were counted instead of functions, and container groups instead of containers.
-- Rounding per subscription (overcount with many small subscriptions).
-- Used the retired PostgreSQL/MySQL/MariaDB *Single Server* commands.
-
-## Tests
-
-The tests run the scripts against mocked CLIs (`tests/mock/`) whose expected result is known:
+### GCP
 
 ```bash
-pip install jmespath
-./tests/run-tests.sh
+curl -sO https://raw.githubusercontent.com/rudidudi/CortexCloudMetering/main/gcp/cc-workload-sizing-gcp.sh
+chmod +x cc-workload-sizing-gcp.sh
+./cc-workload-sizing-gcp.sh
 ```
+
+| Option | Description |
+|---|---|
+| `-h` | Show the help |
+| `-o <id>` | Scan a single organization (default: every organization you can access) |
+| `-l <location>` | Filter resources by location, e.g. `us-central1` |
+
+## AWS: changes from the official script
+
+- **All regions:** every regional service (EC2, Lambda, ECS, App Runner, ECR, EFS, Aurora, RDS, DynamoDB, Redshift)
+  is listed in every region enabled in each account. The official script read everything except EC2
+  only in the CLI's default region. Regions where a service is not offered are skipped, other errors are printed
+  as warnings, and `-n` now also filters S3 buckets.
+- **EC2:** counts instances, not reservations.
+- **Stopped instances:** counted only with `-s` (the official script always counted them).
+- **EKS:** worker nodes are counted once, as EC2 instances. The official script added them again on top
+  (twice more for a cluster with one node group).
+- **Aurora:** counts `aurora-mysql` and `aurora-postgresql` clusters, not only the legacy `aurora` engine.
+- **RDS:** counts every engine (Oracle, SQL Server and Db2 included), except Aurora, DocumentDB and Neptune.
+- **Fargate:** counts services that run on Fargate through a capacity provider strategy (`FARGATE`, `FARGATE_SPOT`).
+- **Lambda:** one call per region instead of one call per function.
+- **Container images:** the per-account total uses the right variable, and negative values are clamped to 0.
+- **PaaS databases:** converted to workloads once, on the total of all accounts.
+- **`-d`:** removed; it was accepted but did nothing.
+
+## AWS: known open issues
+
+- **Container images:** the image count uses `wc -l` (lines, not images), the free quota is subtracted per repository,
+  CaaS workloads are left out of the quota, and the excess is not divided by 10.
+- **CaaS:** counts Fargate services, not containers. Standalone ECS tasks and EKS pods on Fargate are not counted,
+  and each App Runner service counts as 1.
+- **Rounding:** Serverless, CaaS and S3 are still rounded up in each account instead of once on the total.
+- **Organization mode:** the script also tries to assume the role in the management account, where it usually
+  does not exist, so that account is skipped.
+- **Errors:** a failed S3 or account-level call stops the whole run.
+- **Not counted:** Lightsail instances, DocumentDB, Neptune, ElastiCache, OpenSearch, SaaS users,
+  Cloud ASM unmanaged assets, DBaaS TB stored.
+- **To confirm with Palo Alto Networks:** DynamoDB and Redshift are counted as PaaS (2 = 1 workload), not as DBaaS
+  per TB; Aurora is counted per cluster, not per instance.
+- `-c` is accepted but does nothing.
 
 ## Disclaimer
 
