@@ -110,7 +110,7 @@ chmod +x cc-workload-sizing-gcp.sh
 - **PaaS databases:** converted to workloads once, on the total of all accounts.
 - **`-d`:** removed; it was accepted but did nothing.
 
-## AWS: known open issues
+## AWS: known attention points
 
 - **Container images:** the image count uses `wc -l` (lines, not images), the free quota is subtracted per repository,
   CaaS workloads are left out of the quota, and the excess is not divided by 10.
@@ -122,8 +122,6 @@ chmod +x cc-workload-sizing-gcp.sh
 - **Errors:** a failed S3 or account-level call stops the whole run.
 - **Not counted:** Lightsail instances, DocumentDB, Neptune, ElastiCache, OpenSearch, SaaS users,
   Cloud ASM unmanaged assets, DBaaS TB stored.
-- **To confirm with Palo Alto Networks:** DynamoDB and Redshift are counted as PaaS (2 = 1 workload), not as DBaaS
-  per TB; Aurora is counted per cluster, not per instance.
 - `-c` is accepted but does nothing.
 
 ## Disclaimer
