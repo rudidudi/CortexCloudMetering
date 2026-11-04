@@ -7,6 +7,21 @@ They started as a fixed version of the official
 [PaloAltoNetworks/cc-workload-sizing](https://github.com/PaloAltoNetworks/cc-workload-sizing) scripts,
 which contain several counting errors (see [Differences from the official scripts](#differences-from-the-official-scripts)).
 
+## Repository layout
+
+**Status: work in progress.** Everything in this repository is still being worked on.
+
+Each cloud provider has its own folder (`aws/`, `azure/`, `gcp/`) with two subfolders:
+
+| Folder | Content |
+|---|---|
+| `<provider>/script/` | The new sizing script, rewritten to follow the Cortex Cloud Metering Guide |
+| `<provider>/original/` | The official script from [PaloAltoNetworks/cc-workload-sizing](https://github.com/PaloAltoNetworks/cc-workload-sizing) (commit `71b5aa0`, 2026-05-13), with the fixes applied one at a time |
+
+Today `original/` still holds the official scripts unchanged, and the new AWS and Azure scripts are still at
+`aws/cc-sizing-aws.sh` and `azure/cc-sizing-azure.sh`: they will move to `aws/script/` and `azure/script/`.
+There is no new GCP script yet.
+
 ## Conversion rules
 
 | Resource type | Resources per workload |
