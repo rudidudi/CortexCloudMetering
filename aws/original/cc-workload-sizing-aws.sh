@@ -298,13 +298,13 @@ count_resources() {
             total_images_across_all_registries=$((total_images_across_all_registries + image_count))
             container_image_workload=$[(image_count-(ec2_count*10))]
             container_image_workload=$(( container_image_workload < 0 ? 0 : container_image_workload ))
-            total_container_image_workload=$((total_container_image_workload + container_image_workload))
+            total_container_image_workloads=$((total_container_image_workloads + container_image_workload))
                 done
 
             echo "  Total ECR Repositories Found: $(echo "$repository_names" | wc -l)"
             echo "  Total Images Across All Registries: $total_images_across_all_registries"
         fi
-        echo "  $(tput bold)$(tput setaf 2)Container Image Workloads: $total_container_image_workload$(tput sgr0)"
+        echo "  $(tput bold)$(tput setaf 2)Container Image Workloads: $total_container_image_workloads$(tput sgr0)"
         echo ""
 
         # Count S3 buckets
