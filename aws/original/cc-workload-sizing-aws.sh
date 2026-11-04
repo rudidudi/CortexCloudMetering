@@ -403,10 +403,10 @@ count_resources() {
 
         # Count Aurora clusters
         if [[ "${REGION}" ]]; then
-            aurora_count=$(aws rds describe-db-clusters --region $REGION --query "DBClusters[?Engine=='aurora'].DBClusterIdentifier" --output text | wc -w)
+            aurora_count=$(aws rds describe-db-clusters --region $REGION --query "DBClusters[?starts_with(Engine, 'aurora')].DBClusterIdentifier" --output text | wc -w)
             check_error $? "Failed to describe Aurora clusters in region $REGION for account $account_id."
         else
-            aurora_count=$(aws rds describe-db-clusters --query "DBClusters[?Engine=='aurora'].DBClusterIdentifier" --output text | wc -w)
+            aurora_count=$(aws rds describe-db-clusters --query "DBClusters[?starts_with(Engine, 'aurora')].DBClusterIdentifier" --output text | wc -w)
             check_error $? "Failed to describe Aurora clusters (all regions) for account $account_id."
         fi         
         echo "    Aurora clusters: $aurora_count"
