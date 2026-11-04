@@ -104,7 +104,6 @@ fi
 
 # Initialize counters
 total_ec2_instances=0
-total_eks_nodes=0
 total_s3_buckets=0
 total_functions=0
 total_efs=0
@@ -122,8 +121,6 @@ container_image_workloads=0
 total_container_image_workloads=0
 serverless_workloads=0
 total_serverless_workloads=0
-eks_workloads=0
-total_eks_workloads=0
 s3_workloads=0
 total_s3_workloads=0
 
@@ -183,37 +180,7 @@ count_resources() {
     total_ec2_instances=$((total_ec2_instances + ec2_count))
     total_ec2_workloads=$total_ec2_instances
 
-    # Count EKS nodes
-    if [[ "${REGION}" ]]; then
-        clusters=$(aws eks list-clusters --region $REGION --query "clusters" --output text)
-        check_error $? "Failed to list EKS clusters in region $REGION for account $account_id."
-    else
-        clusters=$(aws eks list-clusters --query "clusters" --output text)
-        check_error $? "Failed to list EKS clusters (all regions) for account $account_id."
-    fi        
-    for cluster in $clusters; do
-        node_groups=$(aws eks list-nodegroups --cluster-name "$cluster" --query 'nodegroups' --output text)
-        # If listing nodegroups fails, log warning and skip this cluster
-        if [ $? -ne 0 ]; then
-            echo "    Warning: Failed to list nodegroups for EKS cluster '$cluster' in account $account_id. Skipping cluster."
-            continue
-        fi
-        total_nodes=0
-        for node_group in $node_groups; do
-            node_count=$(aws eks describe-nodegroup --cluster-name "$cluster" --nodegroup-name "$node_group" --query "nodegroup.scalingConfig.desiredSize" --output text)
-            # If describing nodegroup fails, log warning and skip this nodegroup
-            if [ $? -ne 0 ]; then
-                echo "    Warning: Failed to describe nodegroup '$node_group' for cluster '$cluster' in account $account_id. Skipping nodegroup."
-                continue
-            fi
-            total_nodes=$((total_nodes + node_count))
-            echo "  EKS cluster '$cluster' nodegroup $node_group nodes: $node_count"
-            total_eks_nodes=$((total_eks_nodes + node_count))
-            eks_workloads=$total_nodes
-            total_eks_workloads=$((total_eks_nodes + eks_workloads))
-            echo "  $(tput bold)$(tput setaf 2)VM (Container) Workloads: $eks_workloads$(tput sgr0)"
-        done
-    done
+    # EKS worker nodes are EC2 instances, so they are already included in the VM count above
 
     # Count Serverless Functions
     echo ""
@@ -359,7 +326,7 @@ count_resources() {
 
             # Add the current repository's image count to the total
             total_images_across_all_registries=$((total_images_across_all_registries + image_count))
-            container_image_workload=$[(image_count-((ec2_count+total_eks_nodes)*10))]
+            container_image_workload=$[(image_count-(ec2_count*10))]
             container_image_workload=$(( variable < 0 ? 0 : variable ))
             total_container_image_workload=$((total_container_image_workload + container_image_workload))
                 done
@@ -485,11 +452,10 @@ fi
     echo ""
     echo "  -- AWS WORKLOAD COUNTS --"
     echo "     VM workloads: $total_ec2_instances"
-    echo "     VM (container) workloads: $total_eks_workloads"
     echo "     Serverless workloads: $total_serverless_workloads"
     echo "     S3 workloads: $total_s3_workloads"
     echo "     CaaS workloads: $total_caas_workloads"
     echo "     Container Image workloads: $total_container_image_workloads"
     echo "     PaaS workloads: $total_paas_workloads"  
     echo ""
-    echo "$(tput bold)$(tput setaf 2)** SUM TOTAL AWS WORKLOADS: $((total_ec2_instances+total_eks_workloads+total_serverless_workloads+total_s3_workloads+total_caas_workloads+total_container_image_workloads+total_paas_workloads)) **$(tput sgr0)"
+    echo "$(tput bold)$(tput setaf 2)** SUM TOTAL AWS WORKLOADS: $((total_ec2_instances+total_serverless_workloads+total_s3_workloads+total_caas_workloads+total_container_image_workloads+total_paas_workloads)) **$(tput sgr0)"
