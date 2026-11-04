@@ -113,7 +113,6 @@ total_dynamodb=0
 total_redshift=0
 total_ec2_db=0
 ec2_db_count=0
-paas_workloads=0
 total_paas_workloads=0
 caas_workloads=0
 total_caas_workloads=0
@@ -382,12 +381,8 @@ count_resources() {
         echo "    Redshift clusters: $redshift_count"
         total_redshift=$((total_redshift + redshift_count))
 
-        paas_workloads=$[((total_rds + total_aurora + total_dynamodb + total_redshift)+2-1)/2]
-        total_paas_workloads=$((total_paas_workloads + paas_workloads))
-        if [[ $total_rds+$total_aurora+$total_dynamodb+$total_redshift=0 ]]; then
-            paas_workloads=0
-        fi
-        echo "  $(tput bold)$(tput setaf 2)PaaS Workloads: $paas_workloads$(tput sgr0)"
+        # The total_* counters add up databases across all accounts; they are converted to workloads once, after the account loop
+        echo "  $(tput bold)$(tput setaf 2)PaaS databases: $((rds_count + aurora_count + dynamodb_count + redshift_count))$(tput sgr0)"
 
     # Unset temporary credentials only if they were successfully set
     if [ "$ORG_MODE" == true ] && [ -n "$AWS_SESSION_TOKEN" ]; then
@@ -418,6 +413,9 @@ else
     check_error $? "Failed to get caller identity for the current account."
     count_resources "$current_account"
 fi
+
+# PaaS: 2 databases = 1 workload, rounded up once on the databases of all accounts
+total_paas_workloads=$(( (total_rds + total_aurora + total_dynamodb + total_redshift + 1) / 2 ))
 
     echo ""
     echo "  -- AWS WORKLOAD COUNTS --"
