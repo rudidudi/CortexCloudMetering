@@ -20,7 +20,7 @@ Each cloud provider has its own folder (`aws/`, `azure/`, `gcp/`) with two subfo
 
 Today `original/` still holds the official scripts unchanged, and the new AWS and Azure scripts are still at
 `aws/cc-sizing-aws.sh` and `azure/cc-sizing-azure.sh`: they will move to `aws/script/` and `azure/script/`.
-There is no new GCP script yet.
+The new GCP script, `gcp/cc-sizing-gcp.sh`, is an empty placeholder for now.
 
 ## Conversion rules
 
