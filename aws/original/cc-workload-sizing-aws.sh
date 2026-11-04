@@ -161,7 +161,7 @@ count_resources() {
        
     # Count EC2 instances
     if [[ "${REGION}" ]]; then
-        ec2_count=$(aws ec2 describe-instances --region $REGION --filters "Name=instance-state-name,Values=$STATE" --query "Reservations[*].Instances[*]" --output json | jq 'length')
+        ec2_count=$(aws ec2 describe-instances --region $REGION --filters "Name=instance-state-name,Values=$STATE" --query "Reservations[].Instances[]" --output json | jq 'length')
         check_error $? "Failed to describe EC2 instances in region $REGION for account $account_id."
     else
         echo "  Counting EC2 instances across all accessible regions..."
@@ -169,7 +169,7 @@ count_resources() {
         # Use the activeRegions variable fetched earlier
         for r in $activeRegions; do
             # Capture stderr to avoid cluttering output for regions where API might not be enabled/accessible
-            count_in_region=$(aws ec2 describe-instances --region "$r" --filters "Name=instance-state-name,Values=$STATE" --query "Reservations[*].Instances[*]" --output json 2>/dev/null | jq 'length')
+            count_in_region=$(aws ec2 describe-instances --region "$r" --filters "Name=instance-state-name,Values=$STATE" --query "Reservations[].Instances[]" --output json 2>/dev/null | jq 'length')
             if [ $? -eq 0 ] && [[ "$count_in_region" =~ ^[0-9]+$ ]]; then
                 # Only print if count > 0 to reduce noise
                 if [ "$count_in_region" -gt 0 ]; then
