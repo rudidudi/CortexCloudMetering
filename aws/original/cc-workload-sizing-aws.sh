@@ -297,7 +297,7 @@ count_resources() {
             # Add the current repository's image count to the total
             total_images_across_all_registries=$((total_images_across_all_registries + image_count))
             container_image_workload=$[(image_count-(ec2_count*10))]
-            container_image_workload=$(( variable < 0 ? 0 : variable ))
+            container_image_workload=$(( container_image_workload < 0 ? 0 : container_image_workload ))
             total_container_image_workload=$((total_container_image_workload + container_image_workload))
                 done
 
