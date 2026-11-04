@@ -263,10 +263,11 @@ count_resources() {
                     echo "      No services found in this cluster."
                 else
                 for service_arn in $service_arns; do
-                    # Get service details to check launch type
-                    service_details=$(aws ecs describe-services --cluster "$cluster_arn" --services "$service_arn" --query 'services[0].launchType' --output text)
+                    # Get the launch type and the capacity providers: services that use a capacity provider
+                    # strategy have no launch type, so Fargate shows up as the FARGATE or FARGATE_SPOT provider
+                    service_details=$(aws ecs describe-services --cluster "$cluster_arn" --services "$service_arn" --query 'services[0].[launchType, capacityProviderStrategy[].capacityProvider][]' --output text)
 
-                    if [ "$service_details" == "Fargate" ]; then
+                    if echo "$service_details" | grep -Eqw 'FARGATE|FARGATE_SPOT'; then
                      ecs_fargate_services=$((ecs_fargate_services + 1))
                       service_name=$(echo "$service_arn" | awk -F'/' '{print $NF}')
                      echo "    Found Fargate Service: $service_name"
