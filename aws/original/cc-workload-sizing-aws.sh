@@ -36,6 +36,7 @@ function printHelp {
     echo "             scan resources in each sub-account. This is typically run from the admin user in"
     echo "             the master account."
     echo " -r <role>   Specify a non default role to assume in combination with organization mode"
+    echo " -s          Include stopped instances in addition to running ones"
     echo ""
     exit 1
 }
@@ -58,7 +59,7 @@ check_error $? "AWS CLI not configured or credentials invalid. Please run 'aws c
 ORG_MODE=false
 ROLE="OrganizationAccountAccessRole"
 REGION=""
-STATE="running,stopped"
+STATE="running"
 
 # Get options
 while getopts ":cdhn:or:s" opt; do
