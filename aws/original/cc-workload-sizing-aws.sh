@@ -379,15 +379,15 @@ count_resources() {
         echo "    Aurora clusters: $aurora_count"
         total_aurora=$((total_aurora + aurora_count))
 
-        # Count RDS instances
+        # Count RDS instances of every engine except Aurora (counted per cluster above), DocumentDB and Neptune
         if [[ "${REGION}" ]]; then
-            rds_count=$(aws rds describe-db-instances --region $REGION --query "DBInstances[?Engine=='mysql' || Engine=='mariadb' || Engine=='postgres'].DBInstanceIdentifier" --output text | wc -w)
+            rds_count=$(aws rds describe-db-instances --region $REGION --query "DBInstances[?!starts_with(Engine, 'aurora') && Engine!='docdb' && Engine!='neptune'].DBInstanceIdentifier" --output text | wc -w)
             check_error $? "Failed to describe RDS instances in region $REGION for account $account_id."
         else
-            rds_count=$(aws rds describe-db-instances --query "DBInstances[?Engine=='mysql' || Engine=='mariadb' || Engine=='postgres'].DBInstanceIdentifier" --output text | wc -w)
+            rds_count=$(aws rds describe-db-instances --query "DBInstances[?!starts_with(Engine, 'aurora') && Engine!='docdb' && Engine!='neptune'].DBInstanceIdentifier" --output text | wc -w)
             check_error $? "Failed to describe RDS instances (all regions) for account $account_id."
         fi   
-        echo "    RDS instances (MySQL, MariaDB, PostgreSQL): $rds_count"
+        echo "    RDS instances (MySQL, MariaDB, PostgreSQL, Oracle, SQL Server, Db2): $rds_count"
         total_rds=$((total_rds + rds_count))
 
         # Count DynamoDB tables
