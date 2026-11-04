@@ -184,47 +184,16 @@ count_resources() {
 
     # Count Serverless Functions
     echo ""
-    echo "  Counting active and inactive serverless functions in AWS..."
+    echo "  Counting serverless functions in AWS..."
 
-    # Initialize counters
-    active_functions=0
-    inactive_functions=0
+    # Count all Lambda functions with a single call. Active and inactive functions are both counted,
+    # so there is no need to look up each function's state.
+    # --output text prints the ARNs separated by tabs, so count words, not lines.
+    total_functions=$(aws lambda list-functions --query 'Functions[].FunctionArn' --output text | wc -w)
 
-    # Get a list of all Lambda function ARNs
-    # The --query argument filters the output to only the FunctionArn and flattens the list.
-    # The --output text argument formats the output as plain text, one ARN per line.
-    function_arns=$(aws lambda list-functions --query 'Functions[].FunctionArn' --output text)
-
-    # Check if any functions were found
-    if [ -z "$function_arns" ]; then
-    echo "    No serverless functions found in your AWS account."
+    if (( total_functions == 0 )); then
+        echo "    No serverless functions found in your AWS account."
     else
-    
-        # Loop through each function ARN to get its state
-        for arn in $function_arns; do
-        # Extract the function name from the ARN for easier reading in output
-        function_name=$(echo "$arn" | awk -F':' '{print $NF}')
-
-        # Get the function configuration, specifically the State and LastUpdateStatus
-        # We use jq to parse the JSON output and extract the relevant fields.
-        # .Configuration.State will be "Active", "Inactive", "Pending" etc.
-        # .Configuration.LastUpdateStatus will be "Successful", "Failed" etc.
-        function_state_info=$(aws lambda get-function-configuration --function-name "$arn" --query '{State: State, LastUpdateStatus: LastUpdateStatus}' --output json)
-
-        # Parse the state and last update status using jq
-        state=$(echo "$function_state_info" | jq -r '.State')
-        last_update_status=$(echo "$function_state_info" | jq -r '.LastUpdateStatus')
-
-        #echo "Function: $function_name, State: $state, LastUpdateStatus: $last_update_status"
-
-        # Determine if the function is active or inactive based on its state and last update status
-        if [[ "$state" == "Active" && "$last_update_status" == "Successful" ]]; then
-            active_functions=$((active_functions + 1))
-        else
-            inactive_functions=$((inactive_functions + 1))
-        fi
-        done
-        total_functions=$((active_functions + inactive_functions))
         echo "    Total Serverless Functions: $total_functions"
     fi
 
