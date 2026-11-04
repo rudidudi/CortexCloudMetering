@@ -62,7 +62,7 @@ REGION=""
 STATE="running"
 
 # Get options
-while getopts ":cdhn:or:s" opt; do
+while getopts ":chn:or:s" opt; do
   case ${opt} in
     c) SSM_MODE=true ;;
     h) printHelp ;;
